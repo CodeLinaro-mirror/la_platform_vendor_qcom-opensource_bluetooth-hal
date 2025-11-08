@@ -1,0 +1,13 @@
+cc_test {
+    name: "VtsHalBluetooth_TransportTest",
+    defaults: ["VtsHalTargetTestDefaults"],
+    srcs: ["VtsHalBluetooth_TransportTest.cpp", "wake_lock.cpp"],
+    include_dirs: ["packages/modules/Bluetooth/system/types"],
+    shared_libs: [
+        "android.hardware.bluetooth@1.0",
+    ],
+    static_libs: [
+        "VtsHalHidlTargetTestBase",
+    ],
+    test_suites: ["general-tests"],
+}
