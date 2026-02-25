@@ -1586,7 +1586,7 @@ void UartController::OnDataReady(int fd)
         if (invalid_bytes_counter_ < TX_RX_PKT_ASC_SIZE)
           inv_bytes[invalid_bytes_counter_] = hci_packet_type_;
         invalid_bytes_counter_++;
-        if (hci_packet_type_ == IBS_WAKE_IND) {
+        if (static_cast<uint8_t>(hci_packet_type_) == IBS_WAKE_IND) {
           sync_bytes_rcvd_++;
           ALOGE("%s: OutOfSync - Sync Byte Rcvd:%d", __func__, sync_bytes_rcvd_);
           if (sync_bytes_rcvd_ == MIN_BYTES_FOR_SYNC_CONFIRM) {
