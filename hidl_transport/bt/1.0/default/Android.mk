@@ -10,7 +10,7 @@ LOCAL_CPPFLAGS := -DUART_BAUDRATE_3_0_MBPS
 endif
 
 $(info PRODUCT_DEVICE=$(PRODUCT_DEVICE))
-ifneq (,$(filter gen5_gvm gen5_gvm_gy gen4_gvm_gy gen4_gvm_gy_sgt gen5_gvm_sgt, $(PRODUCT_DEVICE)))
+ifneq (,$(filter gen5_gvm gen5_gvm_gy gen4_gvm_gy gen4_gvm_gy_sgt gen5_gvm_sgt gen4_gvm_gy_qmaa auto_gen_prime, $(PRODUCT_DEVICE)))
 LOCAL_CPPFLAGS += -DTARGET_QTI_VM
 endif
 
