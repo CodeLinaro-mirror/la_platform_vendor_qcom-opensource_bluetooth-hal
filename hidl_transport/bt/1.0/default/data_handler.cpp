@@ -801,7 +801,9 @@ void DataHandler::usr1_handler(int /* s */)
   ALOGD("%s: Unlocking bugreport mutex as init thread killed", __func__);
   Logger::bugreport_mutex.unlock();
   ALOGI("%s: exit\n", __func__);
+#ifdef WAKE_LOCK_ENABLED
   Wakelock :: UnlockWakelockMutex();
+#endif
   pthread_exit(&status);
 }
 
