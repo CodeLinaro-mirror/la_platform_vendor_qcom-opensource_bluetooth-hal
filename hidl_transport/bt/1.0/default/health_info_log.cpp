@@ -184,7 +184,11 @@ void HealthInfoLog::ReportHealthInfo()
   temp /= 60;
   hour = temp%24;
 
+#ifdef WAKE_LOCK_ENABLED
   bool lock_held = Wakelock::GetWakeLockStatus();
+#else
+  bool lock_held = false;
+#endif
 
   snprintf(stat_buf, 512, "ts <%02d:%02d:%02d:%06d> rx_vote:%0x, tx_vote:%0x, wake_lock holding:%d, "
             "maximum rx sleep-wake-interval:%dsec, maximum tx packet-interval:%dsec"
