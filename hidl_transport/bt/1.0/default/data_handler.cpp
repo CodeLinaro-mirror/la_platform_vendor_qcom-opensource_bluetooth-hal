@@ -112,12 +112,12 @@ bool DataHandler::secureEvent = false;
 
 #define BTTPI_EVENT_LEN 7
 #define MIN_OPCODE_LEN     (5)
-/* Startup time is set to 2.85 sec w.r.t HIDL.
- * This is done because many times HIDL detect close triggered before
- * startup timer expiry but in actual startup timer is expired.
- * Delay of Close() call excution from BT Stack to HIDL should be considered.
+/* Startup time is set to 6.85 sec w.r.t HIDL.
+ * Increased from 2.85 sec to accommodate multiple PatchVerReq/SetBaudRate
+ * retry attempts during BT HAL init, where each retry may take up to ~2 sec.
+ * Delay of Close() call execution from BT Stack to HIDL should also be considered.
  */
-#define HIDL_INIT_TIMEOUT  (2850)
+#define HIDL_INIT_TIMEOUT  (6850)
 /* HIDL INIT timeout in case XMEM patch file
  * is used with default download configuration.
  */
@@ -1016,6 +1016,18 @@ bool DataHandler::Open(ProtocolType type, InitializeCallback init_cb,
                                    });
         if (status)
           break;
+        /* Before retrying, check if the init timer already fired.  If it has,
+         * InitTimeOut() has concurrently triggered SSR/Close; continuing to
+         * retry would race with that cleanup, so bail out here.
+         */
+        {
+          std::unique_lock<std::mutex> lock(DataHandler::init_timer_mutex_);
+          if (GetInitTimerState() == TIMER_OVERFLOW) {
+            ALOGW("%s: init timer overflow detected after attempt %d, stopping retries",
+                  __func__, retry_count + 1);
+            break;
+          }
+        }
         ++retry_count;
       }
       gettimeofday(&tv, NULL);
@@ -1830,7 +1842,21 @@ void DataHandler::StartInitTimer()
     } else if(prop_val == 2) {
       timeout = HIDL_INIT_TIMEOUT_XMEM;
     } else {
-      timeout = HIDL_INIT_TIMEOUT;
+      char timeout_val[PROPERTY_VALUE_MAX] = {'\0'};
+      logger_->PropertyGet("persist.vendor.bluetooth.init_timeout", timeout_val, "");
+      if (timeout_val[0] != '\0') {
+        int prop_timeout = atoi(timeout_val);
+        if (prop_timeout > 0) {
+          timeout = prop_timeout;
+          ALOGD("%s: Init timeout overridden by property: %d ms", __func__, timeout);
+        } else {
+          ALOGE("%s: Invalid init_timeout property value '%s', using default %d ms",
+                __func__, timeout_val, HIDL_INIT_TIMEOUT);
+          timeout = HIDL_INIT_TIMEOUT;
+        }
+      } else {
+        timeout = HIDL_INIT_TIMEOUT;
+      }
     }
     ts.it_value.tv_sec = (timeout / 1000);
     ts.it_value.tv_nsec = 1000000 * (timeout % 1000);
