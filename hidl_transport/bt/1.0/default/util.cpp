@@ -149,7 +149,7 @@ bool Util::isBtSwitchEnabled()
 
 bool Util :: isDiagEnabled()
 {
-  int32_t enable_diag_flag = getPropInt(BT_ENABLE_DIAG_PROP, BT_ENABLE_DIAG_DEFAULT);
+  int32_t enable_diag_flag = getPropInt(BT_ENABLE_DIAG_PROP, BT_ENABLE_DIAG_NONE);
   return isDefaultaidl() ?
         enable_diag_flag & BT_ENABLE_DIAG_DEFAULT :
         enable_diag_flag & BT_ENABLE_DIAG_NEW;
