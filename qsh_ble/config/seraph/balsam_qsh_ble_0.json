@@ -1,0 +1,16 @@
+{
+  "config":{
+    "hw_platform": ["MTP", "Surf", "RCM", "QRD", "IDP", "CDPS", "GDP"],
+    "platform_family": ["163", "174"]
+  },
+  "qsh_ble_config":{
+    "owner": "qsh_ble",
+    "uart_instance":{ "type": "int", "ver": "0",
+        "data": "-1"
+    },
+
+    "i3c_instance":{ "type": "int", "ver": "0",
+        "data": "-1"
+    }
+  }
+}

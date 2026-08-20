@@ -487,6 +487,9 @@ bool hidl_client_initialize(int mode, int *tool_fd) {
                 return false;
             }
             break;
+#ifdef BT_AIDL_HAL
+        case MODE_THREAD:
+#endif
         default:
             ALOGE("Unsupported mode");
             return false;
@@ -546,7 +549,9 @@ void hidl_client_close() {
             fmHci->close();
             fmHci = nullptr;
             break;
-
+#ifdef BT_AIDL_HAL
+        case MODE_THREAD:
+#endif
         default:
             ALOGE("Unsupported mode");
             break;

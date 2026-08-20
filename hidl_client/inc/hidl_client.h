@@ -4,6 +4,7 @@
  *
  * Copyright (c) 2017 The Linux Foundation. All rights reserved.
 */
+#pragma once
 
 #ifdef __cplusplus
 extern "C"
@@ -20,4 +21,5 @@ void hidl_client_close();
 #define MODE_BT (0)
 #define MODE_ANT (1)
 #define MODE_FM (2)
+#define MODE_THREAD (3)
 
