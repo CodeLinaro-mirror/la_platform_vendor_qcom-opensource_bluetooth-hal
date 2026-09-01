@@ -23,6 +23,8 @@
 
 #pragma once
 
+#include <mutex>
+
 #include <hidl/HidlSupport.h>
 #include "hci_internals.h"
 
