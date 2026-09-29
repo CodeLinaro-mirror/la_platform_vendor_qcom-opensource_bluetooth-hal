@@ -6,6 +6,7 @@ Description
 # SPDX-License-Identifier: BSD-3-Clause-Clear.
 
 ===========================================================================*/
+#include <cutils/properties.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
@@ -24,8 +25,11 @@ Description
 #define LOG_TAG "vendor.qti.bluetooth@1.0-uart_logs"
 #endif
 
-#define UART_LOG_COLLECTION_DIR  "/sys/kernel/tracing/instances/hsuart"
+#define UART_LOG_DEFAULT_COLLECTION_DIR \
+    "/sys/kernel/tracing/instances/serial_log_info"
 #define UART_LOG_FILE_NAME    "/trace"
+
+#define BT_FTRACE_PROP "persist.vendor.bt.ftrace_root_dir"
 
 #define BT_SOC_CHEROKEE 1
 
@@ -35,11 +39,22 @@ namespace bluetooth {
 namespace V1_0 {
 namespace implementation {
 
+static void GetUartLogCollectionDir(char* out, size_t out_size) {
+  char prop_val[PROPERTY_VALUE_MAX] = {0};
+
+  if (property_get(BT_FTRACE_PROP, prop_val, "") > 0) {
+    strlcpy(out, prop_val, out_size);
+  } else {
+    strlcpy(out, UART_LOG_DEFAULT_COLLECTION_DIR, out_size);
+  }
+}
+
 void UartLogs::DumpLogs() {
   int fd;
   bool ret;
   char dpath[UART_LOG_PATH_BUF_SIZE];
   char spath[UART_LOG_PATH_BUF_SIZE];
+  char collection_dir[UART_LOG_PATH_BUF_SIZE];
   struct DIR* p_dir;
 
   ALOGD("%s: -->", __func__);
@@ -48,12 +63,14 @@ void UartLogs::DumpLogs() {
 
   static_cast<Logger*>(logger_)->GetUartLogFilename(dpath);
 
-  strlcpy(spath, UART_LOG_COLLECTION_DIR, sizeof(spath));
+  // Get configurable ftrace root dir
+  GetUartLogCollectionDir(collection_dir, sizeof(collection_dir));
+  strlcpy(spath, collection_dir, sizeof(spath));
 
   /* Finding the UART IPC log source location */
-  p_dir = opendir(UART_LOG_COLLECTION_DIR);
+  p_dir = opendir(collection_dir);
   if (p_dir == NULL) {
-    ALOGE("%s: Unable to open the Dir %s err: %s (%d)", __func__, UART_LOG_COLLECTION_DIR,
+    ALOGE("%s: Unable to open the Dir %s err: %s (%d)", __func__, collection_dir,
       strerror(errno), errno);
     return;
   }

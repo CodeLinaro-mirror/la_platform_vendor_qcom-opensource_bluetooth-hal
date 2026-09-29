@@ -18,6 +18,7 @@
 // limitations under the License.
 //
 
+#include <atomic>
 #include <pthread.h>
 #include <chrono>
 #include <thread>
@@ -30,6 +31,8 @@
 #include "bluetooth_address.h"
 #include <utils/Log.h>
 #include <signal.h>
+#include <sys/eventfd.h>
+#include <fcntl.h>
 #include "state_info.h"
 
 #ifdef BT_CP_CONNECTED
@@ -72,6 +75,17 @@ uint16_t awaited_evt;
 XpanManager xpan_manager;
 #endif
 
+static std::once_flag g_watchdog_once;
+// eventfd used by the signal handler to wake the thread
+static int g_event_fd = -1;
+
+// killer timer is armed only once
+static std::atomic<bool> g_killer_armed{false};
+
+// Property name and default timeout (milliseconds)
+static constexpr const char* kTermTimeoutProp = "persist.vendor.bt.term_timeout_ms";
+static constexpr int kTermTimeoutDefaultMs = 3000;
+
 // TPI Async Events
 const uint8_t HCI_VS_COEX_STX_BT_PWR_REPORT_IND = 0x1B;
 const uint8_t HCI_VS_COEX_STX_BT_MAX_PWR_IND    = 0x1C;
@@ -112,12 +126,12 @@ bool DataHandler::secureEvent = false;
 
 #define BTTPI_EVENT_LEN 7
 #define MIN_OPCODE_LEN     (5)
-/* Startup time is set to 2.85 sec w.r.t HIDL.
- * This is done because many times HIDL detect close triggered before
- * startup timer expiry but in actual startup timer is expired.
- * Delay of Close() call excution from BT Stack to HIDL should be considered.
+/* Startup time is set to 6.85 sec w.r.t HIDL.
+ * Increased from 2.85 sec to accommodate multiple PatchVerReq/SetBaudRate
+ * retry attempts during BT HAL init, where each retry may take up to ~2 sec.
+ * Delay of Close() call execution from BT Stack to HIDL should also be considered.
  */
-#define HIDL_INIT_TIMEOUT  (2850)
+#define HIDL_INIT_TIMEOUT  (6850)
 /* HIDL INIT timeout in case XMEM patch file
  * is used with default download configuration.
  */
@@ -307,39 +321,69 @@ int32_t DataHandler::NotifyEvent(const uint32_t peripheral, const uint8_t state)
 
 void DataHandler::data_service_sighandler(int signum)
 {
+  if (signum != SIGTERM) return;
   ALOGD("%s: Setting signal 15 caught status as true", __func__);
-  if (data_handler)
-    data_handler->SetSignalCaught();
-  // lock is required incase of multiple binder threads
-  std::unique_lock<std::mutex> guard(init_mutex_);
-  ALOGW("%s: Caught Signal: %d", __func__, signum);
-
-  if (data_handler) {
-    if (data_handler->Close(TYPE_BT))
-        goto cleanup;
-    if (data_handler->Close(TYPE_FM))
-        goto cleanup;
-    if (data_handler->Close(TYPE_ANT))
-        goto cleanup;
-    return;
-cleanup:
-    ALOGI("%s: deleting data_handler", __func__);
-    delete data_handler;
-    data_handler = NULL;
-    kill(getpid(), SIGKILL);
+  if (g_event_fd >= 0) {
+    uint64_t one = 1;
+    // Wake the watcher thread
+    (void)write(g_event_fd, &one, sizeof(one));
   }
 }
 
-int DataHandler::data_service_setup_sighandler(void)
-{
-  struct sigaction sig_act;
+int DataHandler::data_service_setup_sighandler(void){
+  std::call_once(g_watchdog_once, []() {
+    g_event_fd = eventfd(0, 0);
+    if (g_event_fd < 0) {
+      ALOGW("%s: event_fd creation failure!", __func__);
+      return;
+    }
 
-  ALOGI("%s: Entry", __func__);
-  memset(&sig_act, 0, sizeof(sig_act));
-  sig_act.sa_handler = data_handler->data_service_sighandler;
-  sigemptyset(&sig_act.sa_mask);
+    int flags = fcntl(g_event_fd, F_GETFD);
+    if (flags >= 0) {
+      (void)fcntl(g_event_fd, F_SETFD, flags|FD_CLOEXEC);
+    }
 
-  sigaction(SIGTERM, &sig_act, NULL);
+    // Watcher thread: block on eventfd; once woken by the signal handler, perform cleanup
+    std::thread([]() {
+      uint64_t v;
+      if (read(g_event_fd, &v, sizeof(v)) == sizeof(v)) {
+        if (!g_killer_armed.exchange(true)) {
+            std::thread([](){
+              int closeTimeoutMs = property_get_int32(kTermTimeoutProp, kTermTimeoutDefaultMs);
+              std::this_thread::sleep_for(std::chrono::milliseconds(closeTimeoutMs));
+              ALOGE("%s: SIGTERM shutdown timeout (%d ms), sending SIGKILL",
+                  __func__, closeTimeoutMs);
+              kill(getpid(), SIGKILL);
+            }).detach();
+        }
+        if (data_handler) {
+          data_handler->SetSignalCaught();
+          std::unique_lock<std::mutex> lk(init_mutex_);
+          if (data_handler->Close(TYPE_BT)) {
+            goto cleanup;
+          }
+          if (data_handler->Close(TYPE_FM)) {
+            goto cleanup;
+          }
+          if (data_handler->Close(TYPE_ANT)) {
+            goto cleanup;
+          }
+cleanup:
+          ALOGI("%s: deleting data_handler", __func__);
+          delete data_handler;
+          data_handler = NULL;
+        }
+        kill(getpid(), SIGKILL);
+      }
+    }).detach();
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = &DataHandler::data_service_sighandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+  });
 
   return 0;
 }
@@ -1016,6 +1060,18 @@ bool DataHandler::Open(ProtocolType type, InitializeCallback init_cb,
                                    });
         if (status)
           break;
+        /* Before retrying, check if the init timer already fired.  If it has,
+         * InitTimeOut() has concurrently triggered SSR/Close; continuing to
+         * retry would race with that cleanup, so bail out here.
+         */
+        {
+          std::unique_lock<std::mutex> lock(DataHandler::init_timer_mutex_);
+          if (GetInitTimerState() == TIMER_OVERFLOW) {
+            ALOGW("%s: init timer overflow detected after attempt %d, stopping retries",
+                  __func__, retry_count + 1);
+            break;
+          }
+        }
         ++retry_count;
       }
       gettimeofday(&tv, NULL);
@@ -1775,6 +1831,16 @@ void DataHandler::InitTimeOut(union sigval sig)
 
 void DataHandler::StopInitTimer()
 {
+  /*
+   * When SIGTERM is caught (e.g. during reboot/FDR), StopInitTimer() may block
+   * on init_timer_mutex_ (SIGEV_THREAD timeout handler / other threads).
+   * To guarantee bounded shutdown, skip StopInitTimer() in SIGTERM path.
+   */
+  if (CheckSignalCaughtStatus()) {
+    ALOGI("%s: SIGTERM caught; skip StopInitTimer()", __func__);
+    return;
+  }
+
   struct itimerspec ts;
   TimerState init_timer_state;
 
@@ -1830,7 +1896,21 @@ void DataHandler::StartInitTimer()
     } else if(prop_val == 2) {
       timeout = HIDL_INIT_TIMEOUT_XMEM;
     } else {
-      timeout = HIDL_INIT_TIMEOUT;
+      char timeout_val[PROPERTY_VALUE_MAX] = {'\0'};
+      logger_->PropertyGet("persist.vendor.bluetooth.init_timeout", timeout_val, "");
+      if (timeout_val[0] != '\0') {
+        int prop_timeout = atoi(timeout_val);
+        if (prop_timeout > 0) {
+          timeout = prop_timeout;
+          ALOGD("%s: Init timeout overridden by property: %d ms", __func__, timeout);
+        } else {
+          ALOGE("%s: Invalid init_timeout property value '%s', using default %d ms",
+                __func__, timeout_val, HIDL_INIT_TIMEOUT);
+          timeout = HIDL_INIT_TIMEOUT;
+        }
+      } else {
+        timeout = HIDL_INIT_TIMEOUT;
+      }
     }
     ts.it_value.tv_sec = (timeout / 1000);
     ts.it_value.tv_nsec = 1000000 * (timeout % 1000);

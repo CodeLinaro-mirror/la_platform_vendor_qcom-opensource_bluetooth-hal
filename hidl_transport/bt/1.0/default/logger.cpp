@@ -872,6 +872,15 @@ void Logger :: Init(HciTransport *hci_transport)
   char dst_buff[MAX_BUFF_SIZE];
   struct timeval tv;
 
+  if (!Util::isDiagEnabled()) {
+    ALOGI("%s: Diag disabled for BT%d", __func__, Util::getHwSlot());
+    gettimeofday(&tv, NULL);
+    memset(dst_buff, 0, MAX_BUFF_SIZE);
+    state_info_->AddLogTag(dst_buff, tv, (char *)"Diag Init skipped");
+    state_info_->SetDiagInitStatus(dst_buff);
+    return;
+  }
+
   SetSecondaryCrashReason(BT_HOST_REASON_DIAGINIT_STUCK);
 #endif
 
@@ -883,10 +892,8 @@ void Logger :: Init(HciTransport *hci_transport)
   if (status) {
     state_info_->AddLogTag(dst_buff, tv, (char *)"Diag Init successful");
 
-    if (Util::isDiagEnabled()) {
-      ALOGD("%s: Registered Diag callbacks for BT%d", __func__, Util::getHwSlot());
-      DIAGPKT_DISPATCH_TABLE_REGISTER(DIAG_SUBSYS_BT, ssr_bt_tbl_);
-    }
+    ALOGD("%s: Registered Diag callbacks for BT%d", __func__, Util::getHwSlot());
+    DIAGPKT_DISPATCH_TABLE_REGISTER(DIAG_SUBSYS_BT, ssr_bt_tbl_);
   } else {
     state_info_->AddLogTag(dst_buff, tv, (char *)"Diag Init failed");
   }
